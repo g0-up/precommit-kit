@@ -1,0 +1,3 @@
+# .gitleaksignore — fingerprint của finding được chấp nhận (gitleaks in ra khi fail).
+# Format: <commit>:<file>:<rule-id>:<line>   hoặc   <file>:<rule-id>:<line>
+# Kèm lý do trong comment, review mỗi quý.

@@ -1,0 +1,303 @@
+# ~/.config/precommit-kit/pre-commit-config.full.yaml — profile "full" (mặc định).
+#
+# Bộ hook ĐẦY ĐỦ của kit, chạy cho MỌI repo không có .pre-commit-config.yaml riêng
+# (clone về là ăn ngay). Khác bản trong repo (.pre-commit-config.yaml) ở 2 điểm:
+#   - không tham chiếu scripts/hooks/* của repo; tool gọi qua $KIT_HOME/bin (kit-run, kit-*)
+#   - config từng tool: repo có file (.golangci.yml, .gitleaks.toml, .yamllint.yml, .sqlfluff, ...)
+#     thì dùng của repo, không có thì dùng mặc định ở $KIT_HOME/config/  (xem kit-run)
+# Hook cho ngôn ngữ/định dạng không có trong repo tự Skipped (filter theo types/files: pre-commit nhận
+# diện type từng file theo đuôi + shebang). Monorepo: kit-run --project <marker> gom file theo
+# go.mod / package.json / tsconfig.json gần nhất và chạy tool trong từng thư mục đó.
+#
+# Chọn profile: git config --global precommit-kit.profile full|minimal|off  (hoặc per-repo)
+# Bỏ 1 hook khi cần: SKIP=trivy-vuln git push
+
+minimum_pre_commit_version: "4.0.0"
+default_stages: [pre-commit]
+fail_fast: false
+
+exclude: |
+  (?x)^(
+    vendor/.*|
+    node_modules/.*|
+    dist/.*|
+    build/.*|
+    coverage/.*|
+    .*\.pb\.go|
+    .*\.gen\.go|
+    .*_generated\.go|
+    .*\.min\.(js|css)|
+    .*\.snap
+  )$
+
+repos:
+  # --- 1. vệ sinh cơ bản ------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-json
+        exclude: (^|/)tsconfig.*\.json$|(^|/)\.vscode/.*\.json$
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^(helm|charts)/.*/templates/.*
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
+
+  # --- 2. secret ----------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged secrets)
+        entry: kit-run --cfg .gitleaks.toml -- gitleaks git --pre-commit --staged --redact --no-banner --verbose {cfg:--config}
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # --- 3. Go --------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: golangci-lint-config-verify
+        name: golangci-lint config verify
+        entry: kit-run --project go.mod --cfg .golangci.yml -- golangci-lint config verify {cfg:--config} @@files
+        language: system
+        files: (^|/)\.golangci\.(yml|yaml|toml|json)$
+      - id: golangci-lint-fmt
+        name: golangci-lint fmt (gofmt/goimports/gofumpt)
+        entry: kit-run --project go.mod --cfg .golangci.yml -- golangci-lint fmt {cfg:--config} {files} @@files
+        language: system
+        types: [go]
+        require_serial: true
+      - id: golangci-lint
+        name: golangci-lint (new issues vs HEAD)
+        # file chỉ dùng để tìm module (go.mod gần nhất); lint cả module đó, chỉ báo lỗi mới so với HEAD
+        entry: kit-run --project go.mod --cfg .golangci.yml -- golangci-lint run {cfg:--config} --new-from-rev=HEAD --fix @@files
+        language: system
+        types: [go]
+        require_serial: true
+      - id: go-mod-tidy
+        name: go mod tidy (check)
+        entry: kit-go-mod-tidy
+        language: system
+        files: ^(.*/)?go\.(mod|sum)$
+        pass_filenames: false
+
+  # --- 4. TypeScript / JavaScript (tool lấy từ node_modules của repo; không có thì bỏ qua)
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint --fix
+        entry: kit-run --project package.json --if-exists node_modules/.bin/eslint -- npx --no-install eslint --fix --max-warnings=0 {files} @@files
+        language: system
+        types_or: [javascript, jsx, ts, tsx]
+        require_serial: true
+      - id: prettier
+        name: prettier --write
+        entry: kit-run --project package.json --if-exists node_modules/.bin/prettier -- npx --no-install prettier --write --ignore-unknown {files} @@files
+        language: system
+        types_or: [javascript, jsx, ts, tsx, json, yaml, markdown, css, scss, html]
+        exclude: ^(pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$
+      - id: biome
+        name: biome check --write
+        entry: >-
+          kit-run --project package.json --if-exists node_modules/.bin/biome
+          -- npx --no-install biome check --write --no-errors-on-unmatched {files} @@files
+        language: system
+        types_or: [javascript, jsx, ts, tsx, json]
+
+  # --- 4b. Java -------------------------------------------------------------
+  #   format: google-java-format (binary native, tự tải, không cần JDK). Style AOSP (4 space) mặc định,
+  #           file .java-format-style = "google" để dùng 2 space.
+  #   lint  : checkstyle (jar, cần JDK — mise.toml pin java). Config: checkstyle.xml của repo, mặc định google_checks.
+  #   SAST  : semgrep p/java (pre-push). CVE: trivy đọc pom.xml / gradle.lockfile (pre-push).
+  #   Không gọi mvn/gradle trong hook (quá chậm) — spotless/pmd/spotbugs để ở CI.
+  - repo: local
+    hooks:
+      - id: java-format
+        name: google-java-format
+        entry: kit-java-format
+        language: system
+        types: [java]
+        require_serial: true
+      - id: checkstyle
+        name: checkstyle
+        entry: kit-checkstyle
+        language: system
+        types: [java]
+        require_serial: true
+
+  # --- 4c. .NET ---------------------------------------------------------------
+  #   dotnet format (trong SDK): whitespace + style + analyzers theo .editorconfig của repo, tự sửa file.
+  #   Chạy trong thư mục có *.sln gần nhất, không có thì *.csproj gần nhất. Cần .NET SDK trong PATH (team tự cài).
+  #   CVE: kit-dotnet-vuln (NuGet audit, pre-push) + trivy nếu repo bật packages.lock.json. SAST: semgrep p/csharp.
+  - repo: local
+    hooks:
+      - id: dotnet-format
+        name: dotnet format
+        entry: >-
+          kit-run --project '*.sln,*.csproj'
+          -- dotnet format --verbosity quiet --include {files} @@files
+        language: system
+        types: [c#]
+        require_serial: true
+      - id: dotnet-vuln
+        name: dotnet list package --vulnerable
+        entry: kit-dotnet-vuln
+        language: system
+        stages: [pre-push]
+        files: \.(csproj|fsproj|sln|props)$|packages\.lock\.json$
+        pass_filenames: false
+
+  # --- 4d. Python --------------------------------------------------------------
+  #   ruff = lint + format (thay flake8/isort/black). Config: pyproject.toml [tool.ruff] hoặc ruff.toml của repo;
+  #   không có thì mặc định của ruff (E/F). SAST: semgrep p/python. CVE: trivy đọc requirements/poetry/uv/Pipfile.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.3
+    hooks:
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # --- 5. infra / config / script ---------------------------------------------
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+
+  - repo: local
+    hooks:
+      - id: hadolint
+        name: hadolint (Dockerfile)
+        entry: kit-run --cfg .hadolint.yaml -- hadolint {cfg:--config}
+        language: system
+        types: [dockerfile]
+      - id: actionlint
+        name: actionlint (GitHub Actions)
+        entry: kit-run -- actionlint
+        language: system
+        files: ^\.github/workflows/.*\.ya?ml$
+      - id: terraform-fmt
+        name: terraform fmt
+        entry: kit-run -- terraform fmt -recursive -diff
+        language: system
+        types: [terraform]
+        pass_filenames: false
+      - id: tflint
+        name: tflint
+        entry: kit-tflint
+        language: system
+        types: [terraform]
+        pass_filenames: false
+
+  # Hook do pre-commit quản lý env (Python): override `entry` để đi qua kit-run lấy config mặc định.
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        entry: kit-run --cfg .yamllint.yml -- yamllint --strict {cfg:-c}
+        args: []
+
+  # Markdown: rumdl (Rust, wheel PyPI, đọc được .markdownlint.yaml). KHÔNG dùng markdownlint-cli:
+  # hook đó là language: node -> pre-commit tải nguyên Node.js về mỗi máy (nodeenv), chặn mạng là
+  # vỡ cả stage pre-commit kể cả gitleaks (phát hiện khi test trên Alpine).
+  - repo: https://github.com/rvben/rumdl-pre-commit
+    rev: v0.3.2
+    hooks:
+      - id: rumdl-check
+        entry: kit-run --cfg .markdownlint.yaml -- rumdl check --fix {cfg:--config}
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.51.1
+    hooks:
+      - id: typos
+        entry: kit-run --cfg .typos.toml -- typos {cfg:--config}
+        args: [--force-exclude]   # KHÔNG --write-changes như manifest mặc định: tự sửa làm hỏng text tiếng Việt
+
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 4.5.0
+    hooks:
+      - id: sqlfluff-fix
+        entry: kit-run --cfg .sqlfluff -- sqlfluff fix --show-lint-violations --processes 0 --disable-progress-bar {cfg:--config}
+      - id: sqlfluff-lint
+        entry: kit-run --cfg .sqlfluff -- sqlfluff lint --processes 0 --disable-progress-bar {cfg:--config}
+
+  # --- 6. trivy / govulncheck / tsc (pre-push) ----------------------------------
+  - repo: local
+    hooks:
+      - id: trivy-misconfig
+        name: trivy misconfig (IaC)
+        entry: kit-trivy-scan misconfig
+        language: system
+        files: |
+          (?x)^(
+            .*Dockerfile.*|
+            .*docker-compose.*\.ya?ml|
+            .*compose\.ya?ml|
+            .*\.tf|
+            .*\.tfvars|
+            (helm|charts|k8s|kubernetes|deploy|manifests)/.*\.ya?ml
+          )$
+        pass_filenames: false
+      - id: trivy-vuln
+        name: trivy vuln (dependencies)
+        entry: kit-trivy-scan vuln
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+      - id: govulncheck
+        name: govulncheck (Go)
+        entry: kit-run --project go.mod -- govulncheck ./... @@files
+        language: system
+        stages: [pre-push]
+        files: ^(.*/)?go\.(mod|sum)$|\.go$
+      - id: tsc
+        name: tsc --noEmit
+        entry: >-
+          kit-run --project tsconfig.json --if-exists node_modules/.bin/tsc --if-exists tsconfig.json
+          -- npx --no-install tsc --noEmit -p tsconfig.json @@files
+        language: system
+        stages: [pre-push]
+        types_or: [ts, tsx]
+
+  # --- 6b. semgrep (pre-push) ---------------------------------------------------
+  - repo: https://github.com/semgrep/pre-commit
+    rev: v1.183.0
+    hooks:
+      - id: semgrep
+        entry: kit-run --cfg .semgrep -- semgrep {cfg:--config}
+        stages: [pre-push]
+        types_or: [go, ts, tsx, javascript, java, c#, python, dockerfile, yaml]
+        exclude: ^\.semgrep/
+        args:
+          - --config=p/golang
+          - --config=p/typescript
+          - --config=p/java
+          - --config=p/csharp
+          - --config=p/python
+          - --config=p/dockerfile
+          - --error
+          - --metrics=off
+          - --skip-unknown-extensions
+          - --quiet
+
+  # --- 7. commit message --------------------------------------------------------
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.5.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [--strict, feat, fix, chore, docs, refactor, perf, test, build, ci, revert]

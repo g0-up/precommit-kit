@@ -1,0 +1,33 @@
+# Rule riêng của team — ví dụ mẫu. Mỗi file = 1 nhóm rule; file *.go cùng tên là test case.
+# Test: semgrep test .semgrep/   (file .go cùng tên, đánh dấu // ruleid: / // ok:)
+rules:
+  - id: go-sql-query-string-concat
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Query SQL được ghép chuỗi / fmt.Sprintf với biến -> nguy cơ SQL injection.
+      Dùng placeholder ($1 / ?) và truyền tham số qua args.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $DB.$M($Q, ...)
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(Query|QueryRow|Exec|Prepare|Select|Get)$
+          - patterns:
+              - pattern: $DB.$M($CTX, $Q, ...)
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|SelectContext|GetContext)$
+      - metavariable-pattern:
+          metavariable: $Q
+          pattern-either:
+            - pattern: fmt.Sprintf(...)
+            - patterns:
+                - pattern: $A + $B
+                - pattern-not: '"..." + "..."'
+    metadata:
+      category: security
+      cwe: "CWE-89"
+      references:
+        - https://go.dev/doc/database/sql-injection

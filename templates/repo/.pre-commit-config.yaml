@@ -1,0 +1,51 @@
+# .pre-commit-config.yaml — TẦNG 2 (repo), chạy SAU tầng 1 global của precommit-kit.
+#
+# Tầng 1 (global, ~/.config/precommit-kit) đã có: vệ sinh file, gitleaks, golangci-lint, eslint/prettier,
+# shellcheck, hadolint, yamllint, actionlint, markdownlint, typos, sqlfluff, terraform fmt/tflint,
+# trivy misconfig/vuln, govulncheck, tsc, semgrep, conventional commit.
+# -> KHÔNG lặp lại ở đây. Muốn chỉnh tool của tầng 1 cho repo này: đặt file config của tool
+#    (.golangci.yml, .gitleaks.toml, .yamllint.yml, .sqlfluff, .tflint.hcl, .semgrep/ ...) ở root repo,
+#    kit-run sẽ ưu tiên file của repo.
+#
+# File này chỉ chứa hook ĐẶC THÙ của repo. Ví dụ bên dưới — xoá/sửa theo nhu cầu.
+# Không có dòng "# precommit-kit-standalone" -> tầng 1 chạy đủ profile full.
+minimum_pre_commit_version: "4.0.0"
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      # Unit test nhanh trước khi push (bỏ nếu test > 1 phút; để CI lo)
+      - id: go-test-short
+        name: go test -short
+        entry: go test -short ./...
+        language: system
+        stages: [pre-push]
+        types: [go]
+        pass_filenames: false
+
+      # Sinh code phải được commit cùng (sqlc / protoc / mockgen / oapi-codegen ...)
+      # - id: generate-check
+      #   name: go generate (check diff)
+      #   entry: bash -c 'go generate ./... && git diff --exit-code -- "*.gen.go" "*.pb.go"'
+      #   language: system
+      #   files: \.(proto|sql|ya?ml)$
+      #   pass_filenames: false
+
+      # Chặn file cấu hình môi trường thật
+      - id: forbid-env-files
+        name: forbid .env files
+        entry: 'Không commit file .env (dùng .env.example)'
+        language: fail
+        files: (^|/)\.env(\.[a-z]+)?$
+        exclude: (^|/)\.env\.example$
+
+      # Semgrep rule riêng của repo (ngoài rule mặc định của kit) — pre-push
+      # - id: semgrep-repo-rules
+      #   name: semgrep (repo rules)
+      #   entry: semgrep --config .semgrep/ --error --metrics=off --quiet
+      #   language: system
+      #   stages: [pre-push]
+      #   types_or: [go, ts, tsx]
+      #   exclude: ^\.semgrep/

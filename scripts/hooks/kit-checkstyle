@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# kit-checkstyle [files...] — checkstyle (jar all-in-one, cần JDK 17+ trong PATH; mise.toml pin java).
+# Config theo thứ tự: checkstyle.xml | config/checkstyle/checkstyle.xml ở root repo
+#                     -> $PRECOMMIT_KIT_HOME/config/checkstyle.xml (kit: google_checks chỉnh 4 space, bỏ Javadoc bắt buộc)
+#                     -> checkstyle.xml cạnh script (standalone)  -> /google_checks.xml nhúng trong jar.
+# Suppression: checkstyle-suppressions.xml ở root (google_checks đọc qua ${org.checkstyle.google.suppressionfilter.config}).
+set -euo pipefail
+# shellcheck source=scripts/hooks/_path.sh
+[[ -f "$(dirname "${BASH_SOURCE[0]}")/_path.sh" ]] && source "$(dirname "${BASH_SOURCE[0]}")/_path.sh"
+# shellcheck source=scripts/hooks/_fetch.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_fetch.sh"
+
+CHECKSTYLE_VERSION="${CHECKSTYLE_VERSION:-14.4.0}"
+[[ $# -gt 0 ]] || exit 0
+
+if ! command -v java >/dev/null 2>&1; then
+  echo "kit-checkstyle: cần java (JDK 17+). Cài: mise use -g java@temurin-21 (hoặc install.sh)" >&2
+  exit 1
+fi
+jar="$(kit_fetch "checkstyle-$CHECKSTYLE_VERSION-all.jar" \
+  "https://github.com/checkstyle/checkstyle/releases/download/checkstyle-$CHECKSTYLE_VERSION/checkstyle-$CHECKSTYLE_VERSION-all.jar")"
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+kit_home="${PRECOMMIT_KIT_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/precommit-kit}"
+cfg="/google_checks.xml"
+for c in "$repo_root/checkstyle.xml" "$repo_root/config/checkstyle/checkstyle.xml" \
+         "$kit_home/config/checkstyle.xml" "$(dirname "${BASH_SOURCE[0]}")/../../checkstyle.xml"; do
+  [[ -f "$c" ]] && { cfg="$c"; break; }
+done
+props=(-Dorg.checkstyle.google.severity=error)
+[[ -f "$repo_root/checkstyle-suppressions.xml" ]] && \
+  props+=("-Dorg.checkstyle.google.suppressionfilter.config=$repo_root/checkstyle-suppressions.xml")
+
+# JAVA_TOOL_OPTIONS in "Picked up ..." ra stderr, vô hại
+exec java "${props[@]}" -jar "$jar" -c "$cfg" "$@"

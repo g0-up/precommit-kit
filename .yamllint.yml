@@ -1,0 +1,17 @@
+# .yamllint.yml — relaxed + vài rule cứng; prettier lo phần format
+extends: relaxed
+rules:
+  line-length:
+    max: 160
+    allow-non-breakable-inline-mappings: true
+  truthy:
+    allowed-values: ["true", "false", "on", "off"]   # "on:" trong GitHub Actions
+    check-keys: false
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+ignore: |
+  node_modules/
+  vendor/
+  helm/**/templates/
+  charts/**/templates/

@@ -1,0 +1,88 @@
+# CI parity: chạy đúng 2 tầng như local để `git commit --no-verify` không lọt.
+#   Tầng 1: profile full của precommit-kit (checkout repo kit, install.sh --no-mise)
+#   Tầng 2: .pre-commit-config.yaml của repo (nếu có)
+# Khác local: chạy ALL files, golangci-lint full, gitleaks quét full history của nhánh.
+name: pre-commit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # TODO: repo chứa precommit-kit của tổ chức
+  PRECOMMIT_KIT_REPO: your-org/precommit-kit
+  PRECOMMIT_KIT_REF: main
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks cần full history
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRECOMMIT_KIT_REPO }}
+          ref: ${{ env.PRECOMMIT_KIT_REF }}
+          path: .precommit-kit
+
+      - uses: jdx/mise-action@v2  # cài tool theo mise.toml của KIT (cùng version với máy dev)
+        with:
+          cache: true
+          working_directory: .precommit-kit
+
+      - name: Cache pre-commit envs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.precommit-kit/global/*.yaml', '.pre-commit-config.yaml') }}
+
+      - name: Cache trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: trivy-db-${{ runner.os }}-
+
+      - name: Node deps
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile
+          elif [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci; fi
+
+      - name: Install precommit-kit (global, no hooks needed on CI)
+        run: |
+          .precommit-kit/install.sh --no-mise
+          echo "$HOME/.config/precommit-kit/bin" >> "$GITHUB_PATH"
+          echo "PRECOMMIT_KIT_HOME=$HOME/.config/precommit-kit" >> "$GITHUB_ENV"
+
+      # ---- Tầng 1: global full, all files -------------------------------------
+      - name: "Level 1 · global (pre-commit stage)"
+        env:
+          SKIP: golangci-lint,no-commit-to-branch
+        run: pre-commit run -c "$PRECOMMIT_KIT_HOME/pre-commit-config.full.yaml" --all-files --show-diff-on-failure
+
+      - name: "Level 1 · golangci-lint (full)"
+        if: hashFiles('go.mod') != ''
+        run: kit-run --cfg .golangci.yml -- golangci-lint run '{cfg:--config}' ./...
+
+      - name: "Level 1 · global (pre-push stage)"
+        run: pre-commit run -c "$PRECOMMIT_KIT_HOME/pre-commit-config.full.yaml" --hook-stage pre-push --all-files
+
+      - name: "Level 1 · gitleaks (full history)"
+        run: kit-run --cfg .gitleaks.toml -- gitleaks git --redact --no-banner --verbose --exit-code 1 '{cfg:--config}' .
+
+      # ---- Tầng 2: config của repo ---------------------------------------------
+      - name: "Level 2 · repo config"
+        if: hashFiles('.pre-commit-config.yaml') != ''
+        env:
+          SKIP: no-commit-to-branch
+        run: |
+          pre-commit run --all-files --show-diff-on-failure
+          pre-commit run --hook-stage pre-push --all-files

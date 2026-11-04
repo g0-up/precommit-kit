@@ -1,0 +1,22 @@
+# .sqlfluff — https://docs.sqlfluff.com/en/stable/configuration/
+[sqlfluff]
+# TODO: đổi dialect theo DB thật: postgres | mysql | sqlite | bigquery | ...
+dialect = postgres
+# raw: file migration thuần SQL, không template. Dùng jinja nếu là dbt.
+templater = raw
+max_line_length = 120
+exclude_rules = AM04, ST06, LT05
+large_file_skip_byte_limit = 2000000
+
+[sqlfluff:indentation]
+indent_unit = space
+tab_space_size = 4
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = upper

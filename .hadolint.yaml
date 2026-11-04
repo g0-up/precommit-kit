@@ -1,0 +1,9 @@
+# .hadolint.yaml
+failure-threshold: warning
+ignored:
+  - DL3008   # pin version apt — bật lại nếu team muốn pin tuyệt đối
+  - DL3018   # pin version apk
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+  # - registry.your-org.internal

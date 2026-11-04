@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# kit-run — chạy 1 tool với config "project > repo > kit mặc định", hỗ trợ monorepo.
+#
+#   kit-run [--cfg NAME] [--project MARKER] [--if-exists PATH]... -- CMD [ARGS...] [@@files FILE...]
+#
+#   --cfg NAME        NAME là file/thư mục config (vd .golangci.yml). Trong ARGS dùng token:
+#                       {cfg:FLAG}  -> "FLAG <path>"   (vd {cfg:--config} -> --config /path)
+#                       {cfg=FLAG}  -> "FLAG=<path>"
+#                     <path> tìm theo thứ tự: <project>/NAME, <repo root>/NAME, $PRECOMMIT_KIT_HOME/config/NAME.
+#                     Không có -> token bị bỏ (tool chạy với mặc định của nó).
+#   --project MARKER  Monorepo: gom FILE theo thư mục gần nhất (đi lên) có MARKER (go.mod, package.json,
+#                     tsconfig.json, '*.sln'... — nhận glob, nhớ quote; nhiều marker cách nhau bằng dấu phẩy
+#                     theo thứ tự ưu tiên: '*.sln,*.csproj'), rồi chạy CMD TRONG từng thư mục đó.
+#                     Không có file nào -> chạy ở repo root.
+#   --if-exists PATH  Bỏ qua (exit 0) nếu PATH không tồn tại ở project dir lẫn repo root (workspace hoist).
+#                     Dùng cho tool lấy từ node_modules (eslint/prettier/tsc) ở repo/package không có chúng.
+#   @@files         Dấu ngăn: mọi thứ sau nó là danh sách file pre-commit nối vào (pass_filenames: true).
+#                     Trong ARGS đặt {files} ở chỗ muốn chèn file (đường dẫn tương đối project dir);
+#                     không có {files} -> file chỉ dùng để chọn project, không truyền cho CMD.
+#   CMD không có trong PATH -> exit 1 kèm hướng dẫn cài.
+#
+# Ví dụ (.pre-commit-config.yaml):
+#   entry: kit-run --project go.mod --cfg .golangci.yml -- golangci-lint run {cfg:--config} --new-from-rev=HEAD @@files
+#   entry: kit-run --project package.json --if-exists node_modules/.bin/eslint -- npx --no-install eslint --fix {files} @@files
+#
+# Bash 3.2 compatible (macOS).
+set -uo pipefail
+
+# PATH cho hook chạy từ GUI (JetBrains/VS Code): mise shims, homebrew (standalone mode; global mode dispatcher đã làm)
+# shellcheck source=scripts/hooks/_path.sh
+[[ -f "$(dirname "${BASH_SOURCE[0]}")/_path.sh" ]] && source "$(dirname "${BASH_SOURCE[0]}")/_path.sh"
+
+kit_home="${PRECOMMIT_KIT_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/precommit-kit}"
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+cfg_name="" marker=""
+if_exists=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cfg) cfg_name="$2"; shift 2 ;;
+    --project) marker="$2"; shift 2 ;;
+    --if-exists) if_exists+=("$2"); shift 2 ;;
+    --) shift; break ;;
+    *) echo "kit-run: tham số lạ '$1'" >&2; exit 2 ;;
+  esac
+done
+[[ $# -gt 0 ]] || { echo "kit-run: thiếu CMD sau '--'" >&2; exit 2; }
+
+# tách CMD/ARGS và FILES tại @@files
+cmd_tpl=() files=()
+seen_sep=0
+for a in "$@"; do
+  if [[ $seen_sep -eq 1 ]]; then files+=("$a")
+  elif [[ "$a" == "@@files" ]]; then seen_sep=1
+  else cmd_tpl+=("$a"); fi
+done
+
+# thư mục project gần nhất chứa MARKER, tính từ file (tương đối repo root); không có -> repo root
+project_of() {
+  # marker: danh sách glob cách nhau bằng dấu phẩy, thử theo thứ tự ưu tiên
+  # (vd '*.sln,*.csproj': tìm .sln gần nhất, không có mới tìm .csproj gần nhất)
+  local m d
+  local IFS=','
+  for m in $marker; do
+    IFS=' '
+    d="$(dirname "$1")"
+    while :; do
+      if compgen -G "$repo_root/$d/$m" >/dev/null 2>&1; then
+        [[ "$d" == "." ]] && echo "" || echo "$d"
+        return
+      fi
+      [[ "$d" == "." ]] && break
+      d="$(dirname "$d")"
+    done
+  done
+  echo ""
+}
+
+# chạy 1 lần trong thư mục $1 (tương đối repo root, "" = root) với các file $2.. (tương đối repo root)
+run_in() {
+  local proj="$1"; shift
+  local dir="$repo_root${proj:+/$proj}"
+
+  # tồn tại ở project dir HOẶC repo root (workspace hoist node_modules lên root).
+  # Kiểm tra TRƯỚC khi đòi CMD: máy không có node/npx vẫn phải skip êm với repo không dùng JS.
+  for p in "${if_exists[@]+"${if_exists[@]}"}"; do
+    [[ -e "$dir/$p" || -e "$repo_root/$p" ]] || return 0
+  done
+  if ! command -v "${cmd_tpl[0]}" >/dev/null 2>&1; then
+    echo "precommit-kit: không tìm thấy '${cmd_tpl[0]}' trong PATH. Chạy: install.sh (hoặc mise install trong repo)." >&2
+    return 1
+  fi
+
+  local cfg_path=""
+  if [[ -n "$cfg_name" ]]; then
+    if   [[ -n "$proj" && -e "$dir/$cfg_name" ]]; then cfg_path="$dir/$cfg_name"
+    elif [[ -e "$repo_root/$cfg_name" ]];        then cfg_path="$repo_root/$cfg_name"
+    elif [[ -e "$kit_home/config/$cfg_name" ]];  then cfg_path="$kit_home/config/$cfg_name"
+    fi
+  fi
+
+  # file tương đối project dir
+  local rel=() f
+  for f in "$@"; do
+    if [[ -n "$proj" ]]; then rel+=("${f#"$proj"/}"); else rel+=("$f"); fi
+  done
+
+  local cmd=() a flag
+  for a in "${cmd_tpl[@]}"; do
+    case "$a" in
+      \{cfg:*\}) flag="${a#\{cfg:}"; flag="${flag%\}}"; [[ -n "$cfg_path" ]] && cmd+=("$flag" "$cfg_path") ;;
+      \{cfg=*\}) flag="${a#\{cfg=}"; flag="${flag%\}}"; [[ -n "$cfg_path" ]] && cmd+=("$flag=$cfg_path") ;;
+      \{files\}) cmd+=("${rel[@]+"${rel[@]}"}") ;;
+      *) cmd+=("$a") ;;
+    esac
+  done
+
+  [[ -n "$proj" ]] && echo "kit-run ▶ $proj/" >&2
+  (cd "$dir" && "${cmd[@]}")
+}
+
+if [[ -z "$marker" || ${#files[@]} -eq 0 ]]; then
+  run_in "" "${files[@]+"${files[@]}"}"
+  exit $?
+fi
+
+# gom file theo project (giữ thứ tự xuất hiện; bash 3.2 không có assoc array)
+projects=() status=0
+for f in "${files[@]}"; do
+  p="$(project_of "$f")"
+  found=0
+  for q in "${projects[@]+"${projects[@]}"}"; do [[ "$q" == "$p" ]] && { found=1; break; }; done
+  [[ $found -eq 0 ]] && projects+=("$p")
+done
+for p in "${projects[@]}"; do
+  group=()
+  for f in "${files[@]}"; do [[ "$(project_of "$f")" == "$p" ]] && group+=("$f"); done
+  run_in "$p" "${group[@]}" || status=$?
+done
+exit "$status"

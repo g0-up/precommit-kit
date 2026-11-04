@@ -1,0 +1,38 @@
+# mise.toml — pin toolchain cho dev local (macOS + Linux, x64/arm64)
+# Cài: `mise install` (bootstrap.sh gọi sẵn). Xem registry: `mise registry | grep <tool>`
+# Khi nâng version: sửa ở đây -> commit -> mọi người `mise install` là đồng bộ.
+#
+# Lý do dùng mise thay vì brew/apt:
+#   - 1 file khai báo, chạy giống nhau trên mac và linux
+#   - version pin theo repo (không phải "latest" của brew)
+#   - không đụng Python/Node hệ thống
+
+[tools]
+# runtime (bỏ nếu team đã quản lý go/node bằng cách khác)
+go = "1.24"
+node = "22"
+
+# git hook framework
+pre-commit = "4.7.0"
+
+# security
+gitleaks = "8.30.1"
+trivy = "0.76.1"
+"go:golang.org/x/vuln/cmd/govulncheck" = "latest"
+
+# lint / format
+golangci-lint = "2.15.0"
+java = "temurin-21"       # cho checkstyle (google-java-format dùng binary native, không cần)
+# .NET SDK: cài theo cách của team (installer chính thức / brew install --cask dotnet-sdk); mise plugin dotnet
+# chưa đủ ổn định để pin ở đây.
+hadolint = "2.15.1"
+shellcheck = "0.11.0"
+actionlint = "1.7.12"
+
+# IaC (xoá nếu repo không có Terraform)
+terraform = "1.17.1"     # hoặc: tofu = "1.13.5"
+tflint = "0.65.0"
+
+[settings]
+# tắt confirm khi cài plugin từ registry (CI/bootstrap không interactive)
+yes = true

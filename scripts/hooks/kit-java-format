@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# kit-java-format [files...] — google-java-format (binary native, KHÔNG cần JDK), tự tải lần đầu.
+# Style: AOSP (4 space) mặc định vì gần style IntelliJ phổ biến; đặt file `.java-format-style`
+# ở root repo với nội dung "google" để dùng Google style (2 space).
+# Nâng version: sửa GJF_VERSION (+ sha nếu muốn pin chặt) — xem releases của google/google-java-format.
+set -euo pipefail
+# shellcheck source=scripts/hooks/_path.sh
+[[ -f "$(dirname "${BASH_SOURCE[0]}")/_path.sh" ]] && source "$(dirname "${BASH_SOURCE[0]}")/_path.sh"
+# shellcheck source=scripts/hooks/_fetch.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_fetch.sh"
+
+GJF_VERSION="${GJF_VERSION:-2.0.0}"
+[[ $# -gt 0 ]] || exit 0
+
+kit_platform || exit 1
+asset=""
+if [[ "$KIT_LIBC" != "musl" ]]; then
+  case "$KIT_OS-$KIT_ARCH" in
+    linux-x86_64)  asset="google-java-format_linux-x86-64" ;;
+    linux-arm64)   asset="google-java-format_linux-arm64" ;;
+    darwin-arm64)  asset="google-java-format_darwin-arm64" ;;
+    darwin-x86_64) asset="google-java-format_darwin-x86-64" ;;
+  esac
+fi
+
+if [[ -n "$asset" ]]; then
+  bin="$(kit_fetch "google-java-format-$GJF_VERSION" \
+    "https://github.com/google/google-java-format/releases/download/v$GJF_VERSION/$asset")"
+  run=("$bin")
+else
+  # Alpine/musl hoặc platform không có binary native: dùng jar all-deps, cần java 17+
+  command -v java >/dev/null 2>&1 || { echo "kit-java-format: platform này cần java (JDK 17+) để chạy jar. Cài: mise use -g java@temurin-21" >&2; exit 1; }
+  jar="$(kit_fetch "google-java-format-$GJF_VERSION-all-deps.jar" \
+    "https://github.com/google/google-java-format/releases/download/v$GJF_VERSION/google-java-format-$GJF_VERSION-all-deps.jar")"
+  run=(java -jar "$jar")
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+style=(--aosp)
+[[ -f "$repo_root/.java-format-style" ]] && grep -qi '^google' "$repo_root/.java-format-style" && style=()
+
+exec "${run[@]}" "${style[@]+"${style[@]}"}" --replace "$@"

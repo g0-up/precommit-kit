@@ -1,0 +1,19 @@
+# .typos.toml — spell check cho code/comment/docs
+[default]
+extend-ignore-re = [
+  "(?i)[0-9a-f]{32,}",            # hash / id
+  "[A-Za-z0-9+/]{40,}={0,2}",     # base64
+]
+[default.extend-words]
+# Từ typos cho là "sai" nhưng hợp lệ trong repo.
+# Comment tiếng Việt sẽ sinh false positive (vd: "thay" -> "they"); thêm vào đây
+# hoặc thống nhất comment bằng tiếng Anh.
+thay = "thay"
+tham = "tham"
+thi = "thi"
+ser = "ser"
+ba = "ba"
+[files]
+# "*.md" loại ra vì docs viết tiếng Việt sinh quá nhiều false positive ("Vai" -> "Via"...).
+# Nếu docs tiếng Anh: bỏ "*.md" khỏi danh sách này.
+extend-exclude = ["*.md", "*.sum", "*.lock", "*.min.*", "vendor/", "node_modules/", "testdata/", "*.pb.go"]

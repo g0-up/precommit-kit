@@ -1,0 +1,6 @@
+# .markdownlint.yaml
+default: true
+MD013: false   # line length — prettier không wrap md
+MD033: false   # inline HTML
+MD041: false   # first line heading
+MD060: false   # table pipe alignment — quá ồn với bảng viết tay

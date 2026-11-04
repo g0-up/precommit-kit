@@ -1,0 +1,29 @@
+# ~/.config/precommit-kit/pre-commit-config.minimal.yaml — profile "minimal".
+# Chọn bằng: git config --global precommit-kit.profile minimal   (mặc định là "full")
+# Tiêu chí: không phụ thuộc toolchain của repo, không auto-sửa file, < 2s.
+#
+# Cố ý KHÔNG có: lint ngôn ngữ (cần toolchain repo), conventional commit (repo ngoài/personal
+# có convention khác), trivy (cần DB, chậm), hook tự sửa file (gây bất ngờ ở repo người khác).
+minimum_pre_commit_version: "4.0.0"
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=5120]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+
+  # gitleaks — binary global do mise cài (install.sh). Quét phần stage, redact giá trị.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks-system   # entry sẵn: gitleaks git --pre-commit --redact --staged --verbose
+        # BẮT BUỘC: manifest upstream (v8.30.1) thiếu pass_filenames:false -> pre-commit nối tên file
+        # vào lệnh, gitleaks hiểu là source path và quét 0 byte -> luôn "Passed". Hook id `gitleaks`
+        # (language: golang) không bị vì có pass_filenames:false.
+        pass_filenames: false
+        always_run: true

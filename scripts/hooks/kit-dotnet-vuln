@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# kit-dotnet-vuln — `dotnet list package --vulnerable --include-transitive` cho mọi .sln/.csproj (pre-push).
+# Cần mạng tới NuGet (audit DB). Exit code của lệnh này không ổn định giữa các SDK nên grep output.
+# Lưu ý: trivy chỉ thấy NuGet dep khi có packages.lock.json (<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>)
+# hoặc *.deps.json sau build — bật lockfile để pre-push trivy-vuln cũng quét được .NET.
+set -uo pipefail
+# shellcheck source=scripts/hooks/_path.sh
+[[ -f "$(dirname "${BASH_SOURCE[0]}")/_path.sh" ]] && source "$(dirname "${BASH_SOURCE[0]}")/_path.sh"
+
+if ! command -v dotnet >/dev/null 2>&1; then
+  echo "kit-dotnet-vuln: cần .NET SDK (dotnet) trong PATH" >&2
+  exit 1
+fi
+status=0
+while IFS= read -r -d '' proj; do
+  case "$proj" in */bin/*|*/obj/*|*/node_modules/*) continue ;; esac
+  out="$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1)" || true
+  if grep -q 'has the following vulnerable packages' <<<"$out"; then
+    echo "$out" | grep -E 'vulnerable packages|>' >&2
+    status=1
+  fi
+done < <(find . \( -name '*.sln' -o -name '*.csproj' -o -name '*.fsproj' \) -not -path './.git/*' -print0)
+exit "$status"

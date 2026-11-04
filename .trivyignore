@@ -1,0 +1,4 @@
+# .trivyignore — mỗi dòng 1 CVE / check ID được chấp nhận, kèm lý do + ngày hết hạn.
+# Review lại mỗi quý. Ví dụ:
+# CVE-2024-12345   # false positive: không dùng function bị ảnh hưởng. Review 2026-12-31
+# AVD-DS-0002      # Dockerfile: chạy root có chủ ý trong image build-only

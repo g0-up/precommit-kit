@@ -1,0 +1,44 @@
+# .gitleaks.toml — cấu hình gitleaks cho repo
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+#
+# Kế thừa toàn bộ rule mặc định (~190 rule) và chỉ THÊM rule/allowlist riêng.
+# Không copy rule mặc định vào đây: khi nâng version gitleaks sẽ mất rule mới.
+
+title = "repo gitleaks config"
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Rule riêng cho tổ chức (ví dụ: token nội bộ có prefix cố định)
+# -----------------------------------------------------------------------------
+[[rules]]
+id = "internal-api-token"
+description = "Internal API token (prefix ORG_)"
+regex = '''(?i)\bORG_[A-Za-z0-9]{32,}\b'''
+keywords = ["ORG_"]
+
+# -----------------------------------------------------------------------------
+# Allowlist toàn cục
+# -----------------------------------------------------------------------------
+[allowlist]
+description = "Global allowlist"
+
+# File/thư mục không quét
+paths = [
+  '''(^|/)go\.sum$''',
+  '''(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$''',
+  '''(^|/)testdata/''',
+  '''(^|/)__fixtures__/''',
+  '''(^|/)\.gitleaks\.toml$''',
+  '''\.(png|jpe?g|gif|svg|ico|woff2?|ttf|pdf)$''',
+]
+
+# Giá trị placeholder hay gặp trong .env.example / docs
+regexes = [
+  '''(?i)(changeme|replace[_-]?me|example|dummy|placeholder|your[_-]?(api|secret|token)[_-]?key)''',
+  '''(?i)xxx+''',
+]
+
+# Dòng có comment "gitleaks:allow" sẽ được bỏ qua (dùng tiết kiệm, phải review)
+# Ví dụ:  const demoKey = "AKIA..." // gitleaks:allow
